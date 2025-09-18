@@ -1,12 +1,17 @@
 package services;
 
+import enums.PaymentMethod;
+import enums.PaymentStatus;
 import models.*;
 import models.Order;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentMatchers;
 import repositories.interfaces.IBookRepository;
 import repositories.interfaces.ICartRepository;
 import repositories.interfaces.IOrderRepository;
+import repositories.interfaces.IPaymentRepository;
 import services.implementations.ShoppingService;
 import services.interfaces.IAuthenticationService;
 import services.interfaces.IShoppingService;
@@ -14,6 +19,7 @@ import services.interfaces.IShoppingService;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.*;
 
@@ -22,6 +28,7 @@ public class ShoppingServiceTest {
     private IBookRepository _bookRepo;
     private ICartRepository _cartRepo;
     private IOrderRepository _orderRepo;
+    private IPaymentRepository _paymentRepo;
     private IAuthenticationService _authService;
     private IShoppingService _shoppingService;
     private User user;
@@ -32,7 +39,8 @@ public class ShoppingServiceTest {
         _cartRepo = mock(ICartRepository.class);
         _orderRepo = mock(IOrderRepository.class);
         _authService = mock(IAuthenticationService.class);
-        _shoppingService = new ShoppingService(_bookRepo, _cartRepo, _orderRepo, _authService);
+        _paymentRepo = mock(IPaymentRepository.class);
+        _shoppingService = new ShoppingService(_bookRepo, _cartRepo, _orderRepo, _authService, _paymentRepo);
         user = new User();
         user.setId(1L);
         user.setUsername("viet");
@@ -219,6 +227,134 @@ public class ShoppingServiceTest {
         Exception ex = assertThrows(SecurityException.class,
                 () -> _shoppingService.checkout());
         assertThat(ex.getMessage(), containsString("User not authenticated"));
+
     }
+    @ParameterizedTest
+    @EnumSource(value = PaymentStatus.class, names = {"COMPLETED", "FAILED", "PENDING"})
+    void updatePaymentStatus_given_valid_payment_when_update_then_status_changed(PaymentStatus newStatus) {
+        Order order = new Order();
+        order.setUser(user);
+
+        Payment payment = new Payment();
+        payment.setId(1L);
+        payment.setOrder(order);
+        payment.setStatus(PaymentStatus.PENDING);
+        when(_paymentRepo.findById(1L)).thenReturn(payment);
+        Payment result = _shoppingService.updatePaymentStatus(1L, newStatus);
+        verify(_paymentRepo).save(payment);
+        assertEquals(newStatus, result.getStatus());
+    }
+
+    @Test
+    void updatePaymentStatus_given_canceled_payment_when_update_then_throw_exception() {
+        Order order = new Order();
+        order.setUser(user);
+        Payment payment = new Payment();
+        payment.setId(1L);
+        payment.setOrder(order);
+        payment.setStatus(PaymentStatus.CANCELED);
+        when(_paymentRepo.findById(1L)).thenReturn(payment);
+        assertThrows(IllegalStateException.class,
+                () -> _shoppingService.updatePaymentStatus(1L, PaymentStatus.COMPLETED));
+    }
+
+    @Test
+    void updatePaymentStatus_given_payment_not_owned_by_user_when_update_then_throw_exception() {
+        User another = new User();
+        another.setId(99L);
+        Order order = new Order();
+        order.setUser(another);
+        Payment payment = new Payment();
+        payment.setId(1L);
+        payment.setOrder(order);
+        payment.setStatus(PaymentStatus.PENDING);
+        when(_paymentRepo.findById(1L)).thenReturn(payment);
+        assertThrows(IllegalArgumentException.class,
+                () -> _shoppingService.updatePaymentStatus(1L, PaymentStatus.COMPLETED));
+    }
+    @Test
+    void payOrder_given_valid_order_when_pay_then_create_payment() {
+        Order order = new Order();
+        order.setId(10L);
+        order.setUser(user);
+        Book book = new Book();
+        book.setPrice(100);
+        order.setBook(book);
+        order.setQuantity(2);
+        when(_orderRepo.findById(10L)).thenReturn(order);
+        Payment result = _shoppingService.payOrder(10L, PaymentMethod.CREDIT_CARD);
+        verify(_paymentRepo).save(ArgumentMatchers.any(Payment.class));
+        assertEquals(PaymentStatus.COMPLETED, result.getStatus());
+        assertEquals(200, result.getAmount());
+        assertEquals(PaymentMethod.CREDIT_CARD, result.getMethod());
+    }
+
+    @Test
+    void payOrder_given_order_not_found_when_pay_then_throw_exception() {
+        when(_orderRepo.findById(99L)).thenReturn(null);
+        assertThrows(IllegalArgumentException.class,
+                () -> _shoppingService.payOrder(99L, PaymentMethod.CASH));
+    }
+
+    @Test
+    void payOrder_given_order_not_owned_by_user_when_pay_then_throw_exception() {
+        User other = new User();
+        other.setId(99L);
+        Order order = new Order();
+        order.setUser(other);
+        when(_orderRepo.findById(11L)).thenReturn(order);
+        assertThrows(IllegalArgumentException.class,
+                () -> _shoppingService.payOrder(11L, PaymentMethod.CASH));
+    }
+
+    @Test
+    void cancelPayment_given_pending_payment_when_cancel_then_update_status_and_restore_stock() {
+        Book book = new Book();
+        book.setId(5L);
+        book.setStockQuantity(5);
+        Order order = new Order();
+        order.setUser(user);
+        order.setBook(book);
+        order.setQuantity(2);
+        Payment payment = new Payment();
+        payment.setId(20L);
+        payment.setOrder(order);
+        payment.setStatus(PaymentStatus.PENDING);
+        when(_paymentRepo.findById(20L)).thenReturn(payment);
+        Payment result = _shoppingService.cancelPayment(20L);
+        verify(_bookRepo).save(book);
+        verify(_paymentRepo).save(payment);
+        assertEquals(PaymentStatus.CANCELED, result.getStatus());
+        assertEquals(7, book.getStockQuantity());
+    }
+
+    @Test
+    void cancelPayment_given_completed_payment_when_cancel_then_throw_exception() {
+        Order order = new Order();
+        order.setUser(user);
+        Payment payment = new Payment();
+        payment.setId(21L);
+        payment.setOrder(order);
+        payment.setStatus(PaymentStatus.COMPLETED);
+        when(_paymentRepo.findById(21L)).thenReturn(payment);
+        assertThrows(IllegalStateException.class,
+                () -> _shoppingService.cancelPayment(21L));
+    }
+
+    @Test
+    void cancelPayment_given_payment_not_owned_by_user_when_cancel_then_throw_exception() {
+        User other = new User();
+        other.setId(99L);
+        Order order = new Order();
+        order.setUser(other);
+        Payment payment = new Payment();
+        payment.setId(22L);
+        payment.setOrder(order);
+        payment.setStatus(PaymentStatus.PENDING);
+        when(_paymentRepo.findById(22L)).thenReturn(payment);
+        assertThrows(IllegalArgumentException.class,
+                () -> _shoppingService.cancelPayment(22L));
+    }
+
 
 }
