@@ -1,4 +1,4 @@
-package _shopingServices;
+package services;
 
 import models.*;
 import models.Order;
