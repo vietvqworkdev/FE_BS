@@ -19,8 +19,7 @@ import services.interfaces.IShoppingService;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -354,6 +353,52 @@ public class ShoppingServiceTest {
         when(_paymentRepo.findById(22L)).thenReturn(payment);
         assertThrows(IllegalArgumentException.class,
                 () -> _shoppingService.cancelPayment(22L));
+    }
+    @Test
+    void payOrder_given_not_authenticated_then_throw_exception() {
+        when(_authService.isAuthenticated()).thenReturn(false);
+
+        assertThrows(IllegalStateException.class,
+                () -> _shoppingService.payOrder(1L, PaymentMethod.CASH));
+    }
+
+    @Test
+    void cancelPayment_given_not_authenticated_then_throw_exception() {
+        when(_authService.isAuthenticated()).thenReturn(false);
+
+        assertThrows(IllegalStateException.class,
+                () -> _shoppingService.cancelPayment(1L));
+    }
+
+    @Test
+    void updatePaymentStatus_given_not_authenticated_then_throw_exception() {
+        when(_authService.isAuthenticated()).thenReturn(false);
+
+        assertThrows(IllegalStateException.class,
+                () -> _shoppingService.updatePaymentStatus(1L, PaymentStatus.COMPLETED));
+    }
+    @Test
+    void addToCart_given_cart_items_null_then_initialize_items() {
+        User user = new User();
+        user.setId(1L);
+
+        Book book = new Book();
+        book.setId(1L);
+        book.setStockQuantity(5);
+
+        Cart cart = new Cart();
+        cart.setUser(user);
+        cart.setItems(null); // quan trọng: items null
+
+        when(_authService.isAuthenticated()).thenReturn(true);
+        when(_authService.getAuthenticatedUser()).thenReturn(user);
+        when(_bookRepo.findById(1L)).thenReturn(book);
+        when(_cartRepo.findByUser(user)).thenReturn(cart);
+
+        _shoppingService.addToCart(1L, 3);
+
+        assertNotNull(cart.getItems()); // branch được cover
+        assertEquals(1, cart.getItems().size());
     }
 
 
